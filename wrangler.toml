@@ -1,0 +1,17 @@
+name = "gradual-deployer"
+main = "src/index.ts"
+compatibility_date = "2024-07-24"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+[vars]
+# Default settings - override per-environment as needed
+ERROR_THRESHOLD = "5"
+DEFAULT_WAIT_MINUTES = "5"
+
+[[workflows]]
+name = "gradual-deploy-workflow"
+binding = "DEPLOY_WORKFLOW"
+class_name = "GradualDeployWorkflow"
