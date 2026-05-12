@@ -1,0 +1,23 @@
+src/workflow.ts
+  edd1513e75e7de43 151-152,154,158-162
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "3b5c1345c4ab4db88ae0eee9cb2e1a15676f0d15",
+  "prompts": {
+    "edd1513e75e7de43": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_1e3c3b3eaffeItME2cKu8JTSez",
+        "model": "anthropic/claude-opus-4-6"
+      },
+      "human_author": "yomna",
+      "messages": [],
+      "total_additions": 8,
+      "total_deletions": 10,
+      "accepted_lines": 8,
+      "overriden_lines": 0
+    }
+  }
+}
