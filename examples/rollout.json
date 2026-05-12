@@ -1,0 +1,8 @@
+{
+  "gradual_branches": ["release/*", "gradual-*"],
+  "steps": [10, 25, 50, 75, 100],
+  "soakMinutes": 5,
+  "errorThreshold": 5,
+  "healthCheckStrategy": "wobs_query",
+  "smokeTestUrls": ["https://my-worker.example.com/health"]
+}

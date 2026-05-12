@@ -1,0 +1,178 @@
+name: Gradual Deploy
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+jobs:
+  gradual-deploy:
+    # Only run when PR is actually merged (not just closed)
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check if source branch matches gradual rollout config
+        id: check-branch
+        run: |
+          SOURCE_BRANCH="${{ github.event.pull_request.head.ref }}"
+          echo "source_branch=$SOURCE_BRANCH" >> "$GITHUB_OUTPUT"
+
+          PATTERNS=$(jq -r '.gradual_branches[]' rollout.json)
+
+          MATCH="false"
+          for PATTERN in $PATTERNS; do
+            REGEX="^$(echo "$PATTERN" | sed 's/\*/.*/')"
+            if echo "$SOURCE_BRANCH" | grep -qE "$REGEX"; then
+              MATCH="true"
+              echo "Branch '$SOURCE_BRANCH' matches pattern '$PATTERN'"
+              break
+            fi
+          done
+
+          echo "should_gradual=$MATCH" >> "$GITHUB_OUTPUT"
+
+          if [ "$MATCH" = "false" ]; then
+            echo "Branch '$SOURCE_BRANCH' does not match any gradual rollout pattern. Skipping."
+          fi
+
+      - name: Setup Node
+        if: steps.check-branch.outputs.should_gradual == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        if: steps.check-branch.outputs.should_gradual == 'true'
+        run: npm ci
+
+      - name: Build
+        if: steps.check-branch.outputs.should_gradual == 'true'
+        run: npm run build
+
+      - name: Upload version (wrangler versions upload)
+        if: steps.check-branch.outputs.should_gradual == 'true'
+        id: upload-version
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        run: |
+          OUTPUT=$(npx wrangler versions upload --message "gradual: ${{ github.event.pull_request.title }}" 2>&1)
+          echo "$OUTPUT"
+
+          VERSION_ID=$(echo "$OUTPUT" | grep -oP 'Version ID:\s*\K[a-f0-9-]+' || echo "$OUTPUT" | grep -oP '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' | tail -1)
+
+          if [ -z "$VERSION_ID" ]; then
+            echo "::error::Failed to extract version ID from wrangler output"
+            exit 1
+          fi
+
+          echo "version_id=$VERSION_ID" >> "$GITHUB_OUTPUT"
+          echo "Uploaded version: $VERSION_ID"
+
+      - name: Read rollout config
+        if: steps.check-branch.outputs.should_gradual == 'true'
+        id: rollout-config
+        run: |
+          STEPS=$(jq -c '.steps' rollout.json)
+          SOAK=$(jq -r '.soakMinutes' rollout.json)
+          THRESHOLD=$(jq -r '.errorThreshold' rollout.json)
+          STRATEGY=$(jq -r '.healthCheckStrategy // "wobs_query"' rollout.json)
+          SMOKE_URLS=$(jq -c '.smokeTestUrls // []' rollout.json)
+
+          echo "steps=$STEPS" >> "$GITHUB_OUTPUT"
+          echo "soak_minutes=$SOAK" >> "$GITHUB_OUTPUT"
+          echo "error_threshold=$THRESHOLD" >> "$GITHUB_OUTPUT"
+          echo "strategy=$STRATEGY" >> "$GITHUB_OUTPUT"
+          echo "smoke_urls=$SMOKE_URLS" >> "$GITHUB_OUTPUT"
+
+          echo "Rollout config: steps=$STEPS, soak=${SOAK}m, threshold=${THRESHOLD}%, strategy=$STRATEGY"
+
+      - name: Trigger gradual deploy
+        if: steps.check-branch.outputs.should_gradual == 'true'
+        id: deploy
+        env:
+          DEPLOYER_URL: ${{ secrets.DEPLOYER_URL }}
+        run: |
+          # Read script name from wrangler.json or wrangler.jsonc
+          if [ -f wrangler.json ]; then
+            SCRIPT_NAME=$(jq -r '.name' wrangler.json)
+          elif [ -f wrangler.jsonc ]; then
+            SCRIPT_NAME=$(sed 's|//.*||' wrangler.jsonc | jq -r '.name')
+          else
+            echo "::error::No wrangler.json or wrangler.jsonc found"
+            exit 1
+          fi
+
+          BODY=$(jq -n \
+            --arg scriptName "$SCRIPT_NAME" \
+            --arg newVersionId "${{ steps.upload-version.outputs.version_id }}" \
+            --argjson steps '${{ steps.rollout-config.outputs.steps }}' \
+            --argjson soakMinutes '${{ steps.rollout-config.outputs.soak_minutes }}' \
+            --argjson errorThreshold '${{ steps.rollout-config.outputs.error_threshold }}' \
+            --arg healthCheckStrategy "${{ steps.rollout-config.outputs.strategy }}" \
+            --argjson smokeTestUrls '${{ steps.rollout-config.outputs.smoke_urls }}' \
+            '{
+              scriptName: $scriptName,
+              newVersionId: $newVersionId,
+              steps: $steps,
+              soakMinutes: $soakMinutes,
+              errorThreshold: $errorThreshold,
+              healthCheckStrategy: $healthCheckStrategy,
+              smokeTestUrls: $smokeTestUrls
+            }')
+
+          echo "Triggering gradual deploy:"
+          echo "$BODY" | jq .
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST "$DEPLOYER_URL/deploy" \
+            -H "Content-Type: application/json" \
+            -d "$BODY")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          RESPONSE_BODY=$(echo "$RESPONSE" | sed '$d')
+
+          echo "$RESPONSE_BODY" | jq . 2>/dev/null || echo "$RESPONSE_BODY"
+
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "::error::Deployer returned HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+          INSTANCE_ID=$(echo "$RESPONSE_BODY" | jq -r '.instanceId // empty')
+          STATUS_URL=$(echo "$RESPONSE_BODY" | jq -r '.statusUrl // empty')
+
+          echo "instance_id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
+          echo "status_url=$STATUS_URL" >> "$GITHUB_OUTPUT"
+
+          echo "Gradual deploy triggered!"
+          echo "  Instance: $INSTANCE_ID"
+          echo "  Status:   $STATUS_URL"
+
+      - name: Post deploy summary
+        if: steps.check-branch.outputs.should_gradual == 'true'
+        run: |
+          echo "## Gradual Deploy Triggered" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Source Branch** | \`${{ steps.check-branch.outputs.source_branch }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Version ID** | \`${{ steps.upload-version.outputs.version_id }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Steps** | ${{ steps.rollout-config.outputs.steps }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Soak per step** | ${{ steps.rollout-config.outputs.soak_minutes }} min |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Error threshold** | ${{ steps.rollout-config.outputs.error_threshold }}% |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Strategy** | \`${{ steps.rollout-config.outputs.strategy }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Instance** | \`${{ steps.deploy.outputs.instance_id }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Status URL** | ${{ steps.deploy.outputs.status_url }} |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Skip — normal deploy
+        if: steps.check-branch.outputs.should_gradual != 'true'
+        run: |
+          echo "Branch '${{ github.event.pull_request.head.ref }}' is not configured for gradual rollout."
+          echo "The normal Builds production deploy will handle this merge."
+          echo "## Normal Deploy" >> $GITHUB_STEP_SUMMARY
+          echo "Branch \`${{ github.event.pull_request.head.ref }}\` merged normally (no gradual rollout)." >> $GITHUB_STEP_SUMMARY
