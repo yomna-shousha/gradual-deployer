@@ -1,0 +1,23 @@
+README.md
+  edd1513e75e7de43 61,63-74,77-83,98-127,129-134,136-164,167,169-170,175-179
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "03f9b52cc1d5b602a310ed3ff32546ed69c33ea6",
+  "prompts": {
+    "edd1513e75e7de43": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_1e3c3b3eaffeItME2cKu8JTSez",
+        "model": "anthropic/claude-opus-4-6"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 93,
+      "total_deletions": 23,
+      "accepted_lines": 93,
+      "overriden_lines": 0
+    }
+  }
+}
