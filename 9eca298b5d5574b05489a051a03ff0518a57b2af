@@ -1,0 +1,23 @@
+README.md
+  edd1513e75e7de43 91-119,122,124-125,130-134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "9eca298b5d5574b05489a051a03ff0518a57b2af",
+  "prompts": {
+    "edd1513e75e7de43": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_1e3c3b3eaffeItME2cKu8JTSez",
+        "model": "anthropic/claude-opus-4-6"
+      },
+      "human_author": "yomna",
+      "messages": [],
+      "total_additions": 37,
+      "total_deletions": 12,
+      "accepted_lines": 37,
+      "overriden_lines": 0
+    }
+  }
+}
